@@ -1,0 +1,80 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --bg: #fbf7f1;
+  --card: #ffffff;
+  --sunk: #f3ede4;
+  --ink: #1f1a17;
+  --muted: #7a6f66;
+  --line: #ebe3d8;
+  --accent: #f2612d;
+  --accent-ink: #ffffff;
+  --flame: #ff8a1f;
+  --good: #22a06b;
+  --heat-0: #efe8de;
+  /* chart series: validated CVD-safe order (adjacent pairs) on the card surface */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+}
+.dark {
+  --bg: #141210;
+  --card: #1e1b18;
+  --sunk: #272320;
+  --ink: #f5efe8;
+  --muted: #a39789;
+  --line: #322d28;
+  --accent: #ff7043;
+  --accent-ink: #1a0f0a;
+  --flame: #ffa040;
+  --good: #3ccf8e;
+  --heat-0: #2a2622;
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-card: var(--card);
+  --color-sunk: var(--sunk);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-flame: var(--flame);
+  --color-good: var(--good);
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Bricolage Grotesque", "Plus Jakarta Sans", ui-sans-serif, sans-serif;
+}
+
+html, body { background: var(--bg); color: var(--ink); }
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: none;
+}
+button { cursor: pointer; }
+button:disabled { cursor: default; }
+input, textarea, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.pb-safe { padding-bottom: max(env(safe-area-inset-bottom), 0.5rem); }
+.pt-safe { padding-top: env(safe-area-inset-top); }
+
+.no-scrollbar { scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+
+@keyframes flicker {
+  0%, 100% { transform: scale(1) rotate(-2deg); }
+  50% { transform: scale(1.08) rotate(2deg); }
+}
+.flame-live { animation: flicker 1.6s ease-in-out infinite; transform-origin: 50% 90%; }
+@media (prefers-reduced-motion: reduce) { .flame-live { animation: none; } }
