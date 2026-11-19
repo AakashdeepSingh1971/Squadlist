@@ -174,13 +174,14 @@ export default function Room({ code, onLeave, theme, setTheme }) {
     choose(m);
   };
 
-  // People from before phone keys, or opened from a phone link: claim (or check) once
+  // Each time the room opens, check with the database that this phone really is
+  // meId (sl_claim): it re-links a person whose key was reset, claims people from
+  // before phone keys, and signs out if another phone has them.
   const checked = useRef(null);
   useEffect(() => {
     if (!squad.loaded || !me || checked.current === meId) return;
     checked.current = meId;
     const had = memberKey(code, meId);
-    if (had && !linked.current) return;
     if (!had && me.claimed) { signOut(); onAnotherPhone(me.name); return; }
     const key = had || newPhoneKey();
     setMemberKey(code, meId, key);
@@ -188,9 +189,14 @@ export default function Room({ code, onLeave, theme, setTheme }) {
     squad.actions.claim(meId)
       .then(() => { if (linked.current) toast.success(`This phone is ${me.name} now ${me.emoji}`); })
       .catch((x) => {
-        setMemberKey(code, meId, null);
-        signOut();
-        if (/another phone/.test(x.message)) onAnotherPhone(me.name); else toast.error(x.message);
+        if (/another phone/.test(x.message)) {
+          setMemberKey(code, meId, null);
+          signOut();
+          onAnotherPhone(me.name);
+        } else {
+          if (!had) setMemberKey(code, meId, null);
+          checked.current = null; // offline or similar: try again next time
+        }
       })
       .finally(() => { linked.current = false; });
   }, [squad.loaded, me, meId, code]); // eslint-disable-line react-hooks/exhaustive-deps
