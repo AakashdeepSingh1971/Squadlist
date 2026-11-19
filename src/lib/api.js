@@ -1,4 +1,4 @@
-import { supabase, isConfigured } from "./supabase.js";
+import { rpc as call, getPhoneKey, isConfigured } from "./supabase.js";
 import { addUsage, wireBytes } from "./usage.js";
 
 /*
@@ -11,7 +11,7 @@ const uuid = () => crypto.randomUUID?.() ?? ([1e7] + -1e3 + -4e3 + -8e3 + -1e11)
   (c) => (c ^ (crypto.getRandomValues(new Uint8Array(1))[0] & (15 >> (c / 4)))).toString(16));
 
 async function rpc(fn, args) {
-  const { data, error } = await supabase.rpc(fn, args);
+  const { data, error } = await call(fn, args);
   addUsage("calls", 1);
   addUsage("api", wireBytes(args, 400) + wireBytes(data, 300)); // request + response, with headers
   if (error) throw new Error(error.message);
@@ -22,11 +22,14 @@ function supabaseApi(room) {
   return {
     load: () => rpc("sl_load", { p_room: room }),
     join: ({ name, emoji, color }) => rpc("sl_join", { p_room: room, p_name: name, p_emoji: emoji, p_color: color }),
+    claim: (id) => rpc("sl_claim", { p_room: room, p_member: id }),
     updateMember: ({ id, name, emoji, color }) =>
       rpc("sl_update_member", { p_room: room, p_id: id, p_name: name, p_emoji: emoji, p_color: color }),
     addTask: ({ title, by, to, repeat, due, today, needsProof }) =>
       rpc("sl_add_task", { p_room: room, p_title: title, p_by: by, p_to: to, p_repeat: repeat, p_due: due, p_today: today, p_needs_proof: !!needsProof }),
     removeTask: ({ id, by, today }) => rpc("sl_remove_task", { p_room: room, p_id: id, p_by: by, p_today: today }),
+    editTask: ({ id, by, title, due, day }) =>
+      rpc("sl_edit_task", { p_room: room, p_id: id, p_by: by, p_title: title, p_due: due || null, p_day: day }),
     setNeedsProof: ({ id, by, on }) => rpc("sl_set_needs_proof", { p_room: room, p_id: id, p_by: by, p_on: on }),
     setDone: ({ task, member, day, done }) =>
       rpc("sl_set_done", { p_room: room, p_task: task, p_member: member, p_day: day, p_done: done }),
@@ -60,17 +63,29 @@ function demoApi(room) {
   const inRoom = (d, id) => { if (!d.members.some((m) => m.id === id)) throw new Error("not in this room"); };
 
   return {
-    load: async () => db(),
+    // same rules as the database: a person belongs to the phone (here: tab) that has their key
+    load: async () => { const d = db(); return { ...d, members: d.members.map(({ key, ...m }) => ({ ...m, claimed: !!key })) }; },
     join: op((d, { name, emoji, color }) => {
+      if (!getPhoneKey()) throw new Error("missing phone key");
       if (d.members.length >= 10) throw new Error("room is full");
-      const m = { id: uuid(), room, name: name.trim().slice(0, 24), emoji, color, created_at: now() };
+      const m = { id: uuid(), room, name: name.trim().slice(0, 24), emoji, color, created_at: now(), key: getPhoneKey() };
       d.members.push(m);
-      return m;
+      const { key: _, ...out } = m;
+      return out;
+    }),
+    claim: op((d, id) => {
+      const m = d.members.find((x) => x.id === id);
+      if (!m || !getPhoneKey() || (m.key && m.key !== getPhoneKey())) throw new Error("already on another phone");
+      m.key = getPhoneKey();
+      const { key: _, ...out } = m;
+      return out;
     }),
     updateMember: op((d, { id, name, emoji, color }) => {
       const m = d.members.find((x) => x.id === id);
-      if (m) Object.assign(m, { name: name.trim().slice(0, 24), emoji, color });
-      return m;
+      if (!m || m.key !== getPhoneKey()) throw new Error("this phone is not signed in as that person");
+      Object.assign(m, { name: name.trim().slice(0, 24), emoji, color });
+      const { key: _, ...out } = m;
+      return out;
     }),
     addTask: op((d, { title, by, to, repeat, due, today, needsProof }) => {
       const t = { id: uuid(), room, title: title.trim().slice(0, 120), created_by: by, assigned_to: to,
@@ -90,6 +105,16 @@ function demoApi(room) {
         d.comments = d.comments.filter((x) => x.task_id !== id);
       }
       t.deleted_day = today;
+      return t;
+    }),
+    editTask: op((d, { id, by, title, due, day }) => {
+      const t = d.tasks.find((x) => x.id === id && !x.deleted_day);
+      if (!t) throw new Error("no such task");
+      if (t.created_by !== by) throw new Error("only the person who added it can edit it");
+      if (d.done.some((x) => x.task_id === id && (!t.repeat || x.day === day))) throw new Error("it's already done, so it can't be edited");
+      if (!title.trim()) throw new Error("give it a name");
+      t.title = title.trim().slice(0, 120);
+      if (!t.repeat) t.due = due || null;
       return t;
     }),
     setNeedsProof: op((d, { id, by, on }) => {

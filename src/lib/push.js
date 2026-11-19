@@ -2,7 +2,7 @@
 // daily reminder when your tasks aren't done. Needs the sl-push Edge Function
 // (supabase/functions/sl-push) and a VAPID key (see README).
 // On iPhone this only works once the app is added to the home screen (iOS 16.4+).
-import { supabase, pushConfigured, VAPID_PUBLIC_KEY } from "./supabase.js";
+import { supabase, rpc, pushConfigured, VAPID_PUBLIC_KEY } from "./supabase.js";
 import { addUsage } from "./usage.js";
 import { store } from "./identity.js";
 
@@ -28,7 +28,7 @@ export async function enablePush(room, member, hour) {
   const reg = await navigator.serviceWorker.ready;
   const sub = (await reg.pushManager.getSubscription()) ||
     (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(VAPID_PUBLIC_KEY) }));
-  const { error } = await supabase.rpc("sl_save_push", {
+  const { error } = await rpc("sl_save_push", {
     p_room: room, p_member: member, p_sub: sub.toJSON(),
     p_tz: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC", p_hour: hour,
   });
@@ -41,7 +41,7 @@ export async function disablePush(room) {
   const reg = await navigator.serviceWorker?.ready;
   const sub = await reg?.pushManager.getSubscription();
   if (!sub) return;
-  await supabase.rpc("sl_delete_push", { p_endpoint: sub.endpoint });
+  await rpc("sl_delete_push", { p_endpoint: sub.endpoint });
   await sub.unsubscribe().catch(() => {});
 }
 

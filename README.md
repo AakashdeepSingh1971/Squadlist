@@ -7,7 +7,8 @@ Built with React + Vite, Tailwind, Motion, Supabase (realtime, storage, Edge Fun
 
 ## What's in it
 - **Rooms**: room name + passcode (same pair opens the same room on any phone), or a quick room with a share link
-- **Profiles**: name, color, emoji. On a new phone, tap your name to be you again
+- **Profiles**: name, color, emoji. Each phone stays signed in as its person (a secret key on the phone, checked by the
+  database on every change), so nobody can tick or edit as someone else. New phone: Settings → **Use me on another phone**
 - **Tasks for anyone**: for yourself, a friend, or everyone at once. Tasks from a friend show their initial ("from Rahul")
 - **Once or repeating**: every day, weekdays or picked days; Today / Tomorrow / a date for one-off tasks
 - **Mine** tab: Overdue, Today (drag ⋮⋮ to reorder), Done today, Upcoming, Other days

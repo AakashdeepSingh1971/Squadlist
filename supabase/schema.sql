@@ -17,6 +17,9 @@ create table if not exists public.sl_members (
   created_at timestamptz not null default now()
 );
 create index if not exists sl_members_room on public.sl_members (room);
+-- Each person's phone keeps a random key (sent as the x-sl-key header); only its
+-- sha256 is stored. Every change checks it, so nobody can act as someone else.
+alter table public.sl_members add column if not exists key_hash text;
 
 -- Tasks. repeat = weekdays (0 = Sunday) for repeating tasks, null for one-off.
 create table if not exists public.sl_tasks (
@@ -69,6 +72,40 @@ begin
   if p_room !~ '^[a-z0-9]{6,40}$' then raise exception 'bad room code'; end if;
 end; $$;
 
+-- sha256 of this phone's key (the x-sl-key header), or null if it has none
+create or replace function public.sl_key_hash() returns text
+language plpgsql stable set search_path = public, extensions as $$
+declare k text := coalesce(nullif(current_setting('request.headers', true), '')::json ->> 'x-sl-key', '');
+begin
+  if length(k) < 32 or length(k) > 100 then return null; end if;
+  return encode(digest(k, 'sha256'), 'hex');
+end; $$;
+
+-- "this phone really is p_member": run first in every function that changes something
+create or replace function public.sl_me(p_room text, p_member uuid) returns void
+language plpgsql stable security definer set search_path = public as $$
+begin
+  perform sl_check_room(p_room);
+  if not exists (select 1 from sl_members where id = p_member and room = p_room and key_hash = sl_key_hash()) then
+    raise exception 'this phone is not signed in as that person';
+  end if;
+end; $$;
+
+-- Become a person on this phone: works if nobody has claimed them yet (people
+-- from before keys existed), or if this phone has their key (the
+-- "use me on another phone" link).
+create or replace function public.sl_claim(p_room text, p_member uuid)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare h text := sl_key_hash(); r sl_members;
+begin
+  perform sl_check_room(p_room);
+  if h is null then raise exception 'missing phone key'; end if;
+  update sl_members set key_hash = h
+  where id = p_member and room = p_room and (key_hash is null or key_hash = h) returning * into r;
+  if r.id is null then raise exception 'already on another phone'; end if;
+  return to_jsonb(r) - 'key_hash';
+end; $$;
+
 -- Everything a phone needs to open a room
 create or replace function public.sl_load(p_room text)
 returns jsonb language sql security definer set search_path = public stable as $$
@@ -85,24 +122,26 @@ $$;
 
 create or replace function public.sl_join(p_room text, p_name text, p_emoji text, p_color text)
 returns jsonb language plpgsql security definer set search_path = public as $$
-declare r sl_members;
+declare r sl_members; h text := sl_key_hash();
 begin
   perform sl_check_room(p_room);
+  if h is null then raise exception 'missing phone key'; end if;
   perform pg_advisory_xact_lock(hashtext(p_room));
   if (select count(*) from sl_members where room = p_room) >= 10 then raise exception 'room is full'; end if;
-  insert into sl_members (room, name, emoji, color)
-  values (p_room, left(trim(p_name), 24), left(p_emoji, 8), left(p_color, 16))
+  insert into sl_members (room, name, emoji, color, key_hash)
+  values (p_room, left(trim(p_name), 24), left(p_emoji, 8), left(p_color, 16), h)
   returning * into r;
-  return to_jsonb(r);
+  return to_jsonb(r) - 'key_hash';
 end; $$;
 
 create or replace function public.sl_update_member(p_room text, p_id uuid, p_name text, p_emoji text, p_color text)
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare r sl_members;
 begin
+  perform sl_me(p_room, p_id);
   update sl_members set name = left(trim(p_name), 24), emoji = left(p_emoji, 8), color = left(p_color, 16)
   where id = p_id and room = p_room returning * into r;
-  return to_jsonb(r);
+  return to_jsonb(r) - 'key_hash';
 end; $$;
 
 create or replace function public.sl_add_task(p_room text, p_title text, p_by uuid, p_to uuid,
@@ -130,6 +169,7 @@ create or replace function public.sl_remove_task(p_room text, p_id uuid, p_by uu
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare r sl_tasks;
 begin
+  perform sl_me(p_room, p_by);
   select * into r from sl_tasks where id = p_id and room = p_room;
   if r.id is null then return null; end if;
   if r.created_by <> p_by then raise exception 'only the person who added it can remove it'; end if;
@@ -145,6 +185,7 @@ end; $$;
 create or replace function public.sl_set_done(p_room text, p_task uuid, p_member uuid, p_day date, p_done boolean)
 returns void language plpgsql security definer set search_path = public as $$
 begin
+  perform sl_me(p_room, p_member);
   if not exists (select 1 from sl_tasks where id = p_task and room = p_room and assigned_to = p_member) then
     raise exception 'only the person it is for can tick it';
   end if;
@@ -162,7 +203,7 @@ declare r sl_events;
 begin
   perform sl_check_room(p_room);
   if pg_column_size(p_data) > 500 then raise exception 'too large'; end if;
-  if not exists (select 1 from sl_members where id = p_from and room = p_room) then raise exception 'not in this room'; end if;
+  perform sl_me(p_room, p_from);
   -- a reaction replaces your earlier one on the same tick
   if p_kind = 'react' then
     delete from sl_events where room = p_room and kind = 'react' and task_id = p_task
@@ -273,7 +314,8 @@ end; $$;
 create or replace function public.sl_load(p_room text)
 returns jsonb language sql security definer set search_path = public stable as $$
   select jsonb_build_object(
-    'members', coalesce((select jsonb_agg(m order by m.created_at) from sl_members m where m.room = p_room), '[]'),
+    'members', coalesce((select jsonb_agg((to_jsonb(m) - 'key_hash') || jsonb_build_object('claimed', m.key_hash is not null)
+                         order by m.created_at) from sl_members m where m.room = p_room), '[]'),
     'tasks',   coalesce((select jsonb_agg(t order by t.created_at) from sl_tasks t
                          where t.room = p_room and (t.deleted_day is null or t.deleted_day > current_date - 400)), '[]'),
     'done',    coalesce((select jsonb_agg(jsonb_build_object('task_id', d.task_id, 'member', d.member, 'day', d.day,
@@ -296,7 +338,7 @@ create or replace function public.sl_add_task(p_room text, p_title text, p_by uu
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare r sl_tasks;
 begin
-  perform sl_in_room(p_room, p_by);
+  perform sl_me(p_room, p_by);
   perform sl_in_room(p_room, p_to);
   if (select count(*) from sl_tasks where room = p_room and deleted_day is null) >= 500 then
     raise exception 'too many tasks';
@@ -307,11 +349,32 @@ begin
   return to_jsonb(r);
 end; $$;
 
+-- Whoever added a task can rename it (and move a one-off task's date) while it's
+-- still pending: a one-off task that's never been ticked, or a repeating task
+-- that isn't done on p_day.
+create or replace function public.sl_edit_task(p_room text, p_id uuid, p_by uuid, p_title text, p_due date, p_day date)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare r sl_tasks;
+begin
+  perform sl_me(p_room, p_by);
+  select * into r from sl_tasks where id = p_id and room = p_room and deleted_day is null;
+  if r.id is null then raise exception 'no such task'; end if;
+  if r.created_by <> p_by then raise exception 'only the person who added it can edit it'; end if;
+  if exists (select 1 from sl_done where task_id = p_id and (r.repeat is null or day = p_day)) then
+    raise exception 'it''s already done, so it can''t be edited';
+  end if;
+  if coalesce(trim(p_title), '') = '' then raise exception 'give it a name'; end if;
+  update sl_tasks set title = left(trim(p_title), 120), due = case when repeat is null then p_due else due end
+  where id = p_id returning * into r;
+  return to_jsonb(r);
+end; $$;
+
 -- whoever added a task can ask for (or stop asking for) a photo
 create or replace function public.sl_set_needs_proof(p_room text, p_id uuid, p_by uuid, p_on boolean)
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare r sl_tasks;
 begin
+  perform sl_me(p_room, p_by);
   update sl_tasks set needs_proof = p_on where id = p_id and room = p_room and created_by = p_by returning * into r;
   if r.id is null then raise exception 'only the person who added it can change that'; end if;
   return to_jsonb(r);
@@ -320,6 +383,7 @@ end; $$;
 create or replace function public.sl_set_photo(p_room text, p_task uuid, p_member uuid, p_day date, p_photo text, p_bytes int)
 returns void language plpgsql security definer set search_path = public as $$
 begin
+  perform sl_me(p_room, p_member);
   if p_photo is not null and p_photo !~ '^https://[a-z0-9.-]+/storage/v1/object/public/proofs/' then raise exception 'bad photo link'; end if;
   update sl_done set photo = p_photo, photo_bytes = least(greatest(p_bytes, 0), 5000000)
   where task_id = p_task and day = p_day and member = p_member and room = p_room;
@@ -330,7 +394,7 @@ create or replace function public.sl_add_comment(p_room text, p_task uuid, p_mem
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare r sl_comments;
 begin
-  perform sl_in_room(p_room, p_member);
+  perform sl_me(p_room, p_member);
   if not exists (select 1 from sl_tasks where id = p_task and room = p_room) then raise exception 'no such task'; end if;
   if (select count(*) from sl_comments where room = p_room and created_at > now() - interval '1 day') >= 2000 then
     raise exception 'slow down';
@@ -341,9 +405,11 @@ begin
 end; $$;
 
 create or replace function public.sl_delete_comment(p_room text, p_id uuid, p_member uuid)
-returns void language sql security definer set search_path = public as $$
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  perform sl_me(p_room, p_member);
   delete from sl_comments where id = p_id and room = p_room and member = p_member;
-$$;
+end; $$;
 
 -- Freezes: the app works out how many you've earned (one per 7 streak days,
 -- two at most). The database only allows saving one of the last two days,
@@ -351,7 +417,7 @@ $$;
 create or replace function public.sl_use_freeze(p_room text, p_member uuid, p_day date)
 returns void language plpgsql security definer set search_path = public as $$
 begin
-  perform sl_in_room(p_room, p_member);
+  perform sl_me(p_room, p_member);
   if p_day not between current_date - 2 and current_date then raise exception 'only yesterday can be saved'; end if;
   if (select count(*) from sl_freezes where member = p_member and day > p_day - 14) >= 2 then
     raise exception 'no freezes left';
@@ -363,7 +429,7 @@ create or replace function public.sl_add_challenge(p_room text, p_by uuid, p_tit
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare r sl_challenges;
 begin
-  perform sl_in_room(p_room, p_by);
+  perform sl_me(p_room, p_by);
   if (select count(*) from sl_challenges where room = p_room) >= 100 then raise exception 'too many challenges'; end if;
   insert into sl_challenges (room, title, emoji, goal, ends, created_by)
   values (p_room, left(trim(p_title), 80), left(p_emoji, 8), p_goal, p_ends, p_by) returning * into r;
@@ -373,6 +439,7 @@ end; $$;
 create or replace function public.sl_remove_challenge(p_room text, p_id uuid, p_by uuid)
 returns void language plpgsql security definer set search_path = public as $$
 begin
+  perform sl_me(p_room, p_by);
   delete from sl_challenges where id = p_id and room = p_room and created_by = p_by;
   if not found then raise exception 'only the person who started it can remove it'; end if;
 end; $$;
@@ -381,7 +448,7 @@ create or replace function public.sl_checkin(p_room text, p_challenge uuid, p_me
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare r sl_checkins;
 begin
-  perform sl_in_room(p_room, p_member);
+  perform sl_me(p_room, p_member);
   if p_day not between current_date - 1 and current_date + 1 then raise exception 'only today'; end if;
   if not exists (select 1 from sl_challenges where id = p_challenge and room = p_room and (ends is null or ends >= p_day)) then
     raise exception 'this challenge is over';
@@ -398,7 +465,7 @@ end; $$;
 create or replace function public.sl_save_push(p_room text, p_member uuid, p_sub jsonb, p_tz text, p_hour int)
 returns void language plpgsql security definer set search_path = public as $$
 begin
-  perform sl_in_room(p_room, p_member);
+  perform sl_me(p_room, p_member);
   if coalesce(p_sub->>'endpoint', '') !~ '^https://' or pg_column_size(p_sub) > 2000 then raise exception 'bad subscription'; end if;
   insert into sl_push (endpoint, room, member, sub, tz, remind_hour)
   values (p_sub->>'endpoint', p_room, p_member, p_sub, left(coalesce(p_tz, 'UTC'), 60), p_hour)
@@ -577,12 +644,15 @@ begin
     'sl_use_freeze(text,uuid,date)', 'sl_add_challenge(text,uuid,text,text,int,date)',
     'sl_remove_challenge(text,uuid,uuid)', 'sl_checkin(text,uuid,uuid,date,boolean)',
     'sl_save_push(text,uuid,jsonb,text,int)', 'sl_delete_push(text)',
-    'sl_log_usage(text,date,text,text,text,bigint,bigint,bigint,bigint,int,int,int)', 'sl_admin_report(text)'
+    'sl_log_usage(text,date,text,text,text,bigint,bigint,bigint,bigint,int,int,int)', 'sl_admin_report(text)',
+    'sl_claim(text,uuid)', 'sl_edit_task(text,uuid,uuid,text,date,date)'
   ] loop
     execute format('revoke all on function public.%s from public', f);
     execute format('grant execute on function public.%s to anon, authenticated', f);
   end loop;
   revoke all on function public.sl_in_room(text, uuid) from public, anon, authenticated;
+  revoke all on function public.sl_me(text, uuid) from public, anon, authenticated;
+  revoke all on function public.sl_key_hash() from public, anon, authenticated;
 end $$;
 
 -- each notification is sent once, even if the app asks twice

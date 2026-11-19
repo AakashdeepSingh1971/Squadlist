@@ -11,7 +11,8 @@ import { pushSupported, isIOSBrowser, pushPrefs, enablePush, disablePush } from 
 import { pushConfigured } from "../lib/supabase.js";
 import TaskSheet from "./TaskSheet.jsx";
 import { personLists } from "../lib/lists.js";
-import { myMemberId, recentRooms, rememberRoom, setMyMemberId, shareUrl } from "../lib/identity.js";
+import { memberKey, myMemberId, newPhoneKey, phoneLink, recentRooms, rememberRoom, setMemberKey, setMyMemberId, shareUrl, takePhoneLink } from "../lib/identity.js";
+import { setPhoneKey } from "../lib/supabase.js";
 import { isDemo } from "../lib/api.js";
 import { Avatar, Chip, Sheet } from "./ui.jsx";
 import { ProfileForm, WhoAreYou } from "./Profile.jsx";
@@ -27,7 +28,13 @@ const TABS = [
 ];
 
 export default function Room({ code, onLeave, theme, setTheme }) {
-  const [meId, setMeId] = useState(() => myMemberId(code));
+  const linked = useRef(false); // opened with a "use me on another phone" link
+  const [meId, setMeId] = useState(() => {
+    const id = takePhoneLink(code);
+    if (id) linked.current = true;
+    return id || myMemberId(code);
+  });
+  setPhoneKey(memberKey(code, meId)); // every database call proves this phone is meId
   const [tab, setTab] = useState("mine");
   const [adding, setAdding] = useState(null); // member id the new task is for
   const [settings, setSettings] = useState(false);
@@ -43,7 +50,10 @@ export default function Room({ code, onLeave, theme, setTheme }) {
     const task = tasks.find((t) => t.id === (data.task_id || data.id));
     if (!who || who.id === me) return;
     if (type === "done" && data.done && task) toast(`${who.emoji} ${who.name} finished “${task.title}”`);
-    if (type === "task" && data.assigned_to === me && data.created_by !== me)
+    const old = tasks.find((t) => t.id === data.id);
+    if (type === "task" && old && old.title !== data.title && data.assigned_to === me)
+      toast(`✏️ ${who.name} edited your task`, { description: `${old.title} → ${data.title}` });
+    else if (type === "task" && !old && data.assigned_to === me && data.created_by !== me)
       toast(`${who.emoji} ${who.name} gave you a task`, { description: data.title });
     if (type === "comment" && task && (task.assigned_to === me || task.created_by === me))
       toast(`💬 ${who.name} on “${task.title}”`, { description: data.body });
@@ -137,7 +147,62 @@ export default function Room({ code, onLeave, theme, setTheme }) {
   };
   const sheetTask = openTask && squad.tasks.find((t) => t.id === openTask.id);
 
-  const pick = (m) => { setMyMemberId(code, m.id); setMeId(m.id); toast.success(`Hey ${m.name} ${m.emoji}`); };
+  const choose = (m) => { setMyMemberId(code, m.id); setMeId(m.id); toast.success(`Hey ${m.name} ${m.emoji}`); };
+  const signOut = () => { setMyMemberId(code, null); setMeId(null); };
+  const onAnotherPhone = (name) => toast.error(`${name} is already set up on another phone`, {
+    description: "On that phone, open Settings → Use me on another phone, and open that link here.",
+  });
+
+  // tap a name on "Who's this?": works for people not on any phone yet, or if this phone has their key
+  const pick = async (m) => {
+    const had = memberKey(code, m.id);
+    const key = had || newPhoneKey();
+    setMemberKey(code, m.id, key);
+    setPhoneKey(key);
+    try { await squad.actions.claim(m.id); choose(m); }
+    catch (x) {
+      if (!had) setMemberKey(code, m.id, null);
+      setPhoneKey(memberKey(code, meId));
+      if (/another phone/.test(x.message)) onAnotherPhone(m.name); else toast.error(x.message);
+    }
+  };
+  const join = async (p) => {
+    const key = newPhoneKey();
+    setPhoneKey(key);
+    const m = await squad.actions.join(p);
+    setMemberKey(code, m.id, key);
+    choose(m);
+  };
+
+  // People from before phone keys, or opened from a phone link: claim (or check) once
+  const checked = useRef(null);
+  useEffect(() => {
+    if (!squad.loaded || !me || checked.current === meId) return;
+    checked.current = meId;
+    const had = memberKey(code, meId);
+    if (had && !linked.current) return;
+    if (!had && me.claimed) { signOut(); onAnotherPhone(me.name); return; }
+    const key = had || newPhoneKey();
+    setMemberKey(code, meId, key);
+    setPhoneKey(key);
+    squad.actions.claim(meId)
+      .then(() => { if (linked.current) toast.success(`This phone is ${me.name} now ${me.emoji}`); })
+      .catch((x) => {
+        setMemberKey(code, meId, null);
+        signOut();
+        if (/another phone/.test(x.message)) onAnotherPhone(me.name); else toast.error(x.message);
+      })
+      .finally(() => { linked.current = false; });
+  }, [squad.loaded, me, meId, code]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const linkPhone = async () => {
+    const url = phoneLink(code, meId, memberKey(code, meId));
+    try {
+      if (navigator.share) { await navigator.share({ title: `Squadlist: ${me.name}`, url }); return; }
+      await navigator.clipboard.writeText(url);
+      toast.success("Link copied", { description: "Open it on your other phone. Don't send it to friends: it lets them be you." });
+    } catch (e) { if (e?.name !== "AbortError") toast(url); }
+  };
 
   if (!squad.loaded && !squad.members.length) {
     return <div className="grid min-h-dvh place-items-center text-muted"><span className="animate-pulse text-4xl">✅</span></div>;
@@ -159,8 +224,8 @@ export default function Room({ code, onLeave, theme, setTheme }) {
   if (!me) {
     if (!squad.loaded) return <div className="grid min-h-dvh place-items-center text-muted"><span className="animate-pulse text-4xl">✅</span></div>;
     return (
-      <WhoAreYou members={squad.members} label={label} onPick={pick} onLeave={onLeave}
-        onJoin={async (p) => { const m = await squad.actions.join(p); pick(m); }} />
+      <WhoAreYou members={squad.members} label={label} onPick={pick} onLeave={onLeave} onJoin={join}
+        onThisPhone={(id) => !!memberKey(code, id)} />
     );
   }
 
@@ -263,7 +328,8 @@ export default function Room({ code, onLeave, theme, setTheme }) {
         </div>
         <div className="mt-6 grid gap-2">
           <button onClick={share} className="h-11 rounded-2xl bg-sunk font-semibold">Invite friends ({squad.members.length}/10)</button>
-          <button onClick={() => { setMyMemberId(code, null); setMeId(null); setSettings(false); }} className="h-11 rounded-2xl bg-sunk font-semibold">
+          <button onClick={linkPhone} className="h-11 rounded-2xl bg-sunk font-semibold">Use me on another phone</button>
+          <button onClick={() => { signOut(); setSettings(false); }} className="h-11 rounded-2xl bg-sunk font-semibold">
             Not {me.name}? Switch person
           </button>
           <button onClick={onLeave} className="h-11 rounded-2xl font-semibold text-muted">Back to all rooms</button>

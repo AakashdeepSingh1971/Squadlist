@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion } from "motion/react";
-import { Check } from "lucide-react";
+import { Check, Lock } from "lucide-react";
 import { Avatar } from "./ui.jsx";
 import { COLORS, EMOJIS, freeColor, randomEmoji } from "../lib/people.js";
 
@@ -63,7 +63,7 @@ export function ProfileForm({ initialValue, members = [], submitLabel, onSubmit 
 }
 
 /** First time in a room on this phone: pick who you are, or join as someone new */
-export function WhoAreYou({ members, label, onPick, onJoin, onLeave }) {
+export function WhoAreYou({ members, label, onPick, onJoin, onLeave, onThisPhone = () => false }) {
   const [adding, setAdding] = useState(members.length === 0);
   const full = members.length >= 10;
 
@@ -76,24 +76,28 @@ export function WhoAreYou({ members, label, onPick, onJoin, onLeave }) {
         </h1>
         <p className="mt-2 text-muted">
           {members.length
-            ? `${members.length} of 10 spots taken. Tap your name if you've been here on another phone.`
+            ? `${members.length} of 10 spots taken. Been here on another phone? There, open Settings → Use me on another phone.`
             : "Set yourself up, then share the room with your friends."}
         </p>
 
         {members.length > 0 && (
           <ul className="mt-6 grid grid-cols-2 gap-2">
-            {members.map((m) => (
-              <li key={m.id}>
-                <button onClick={() => onPick(m)}
-                  className="flex w-full items-center gap-3 rounded-2xl border border-line bg-card p-3 text-left transition active:scale-[.98]">
-                  <Avatar member={m} size={40} />
-                  <span className="min-w-0">
-                    <span className="block truncate font-semibold">{m.name}</span>
-                    <span className="text-sm">{m.emoji}</span>
-                  </span>
-                </button>
-              </li>
-            ))}
+            {members.map((m) => {
+              const locked = m.claimed && !onThisPhone(m.id); // someone's phone already is this person
+              return (
+                <li key={m.id}>
+                  <button onClick={() => onPick(m)} aria-disabled={locked}
+                    className={`flex w-full items-center gap-3 rounded-2xl border border-line bg-card p-3 text-left transition active:scale-[.98] ${locked ? "opacity-55" : ""}`}>
+                    <Avatar member={m} size={40} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-semibold">{m.name}</span>
+                      <span className="text-sm">{locked ? "On their phone" : m.emoji}</span>
+                    </span>
+                    {locked && <Lock className="size-4 shrink-0 text-muted" aria-label="On another phone" />}
+                  </button>
+                </li>
+              );
+            })}
           </ul>
         )}
 

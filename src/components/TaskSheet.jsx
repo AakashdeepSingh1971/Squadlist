@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
-import { Camera, Send, Trash2, X } from "lucide-react";
+import { Camera, Pencil, Send, Trash2, X } from "lucide-react";
 import { Avatar, ByChip, Sheet } from "./ui.jsx";
 import { dueLabel, repeatLabel } from "../lib/days.js";
 import { pickPhoto, uploadProof } from "../lib/photo.js";
@@ -19,10 +19,11 @@ export default function TaskSheet({ open, onClose, task, day, ctx }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [zoom, setZoom] = useState(false);
+  const [edit, setEdit] = useState(null); // { title, due } while editing
   const endRef = useRef(null);
   const thread = task ? comments.filter((c) => c.task_id === task.id).sort((a, b) => a.created_at.localeCompare(b.created_at)) : [];
 
-  useEffect(() => { if (open) setText(""); }, [open, task?.id]);
+  useEffect(() => { if (open) { setText(""); setEdit(null); } }, [open, task?.id]);
   useEffect(() => { endRef.current?.scrollIntoView({ block: "nearest" }); }, [thread.length]);
 
   if (!task) return <Sheet open={false} onClose={onClose} />;
@@ -31,6 +32,17 @@ export default function TaskSheet({ open, onClose, task, day, ctx }) {
   const mine = task.assigned_to === meId;
   const row = doneByKey.get(task.id + "|" + day) || (!task.repeat ? [...doneByKey.values()].find((d) => d.task_id === task.id) : null);
   const done = !!row;
+  // only whoever added it, and only while it's pending (repeating: not done on this day)
+  const canEdit = task.created_by === meId && !done && !task.deleted_day;
+
+  const saveEdit = async (e) => {
+    e.preventDefault();
+    if (!edit.title.trim() || busy) return;
+    setBusy(true);
+    try { await actions.editTask(task, edit, day); setEdit(null); toast.success("Task updated"); }
+    catch (x) { toast.error("Couldn't save", { description: x.message }); }
+    finally { setBusy(false); }
+  };
 
   const send = async (e) => {
     e.preventDefault();
@@ -66,7 +78,31 @@ export default function TaskSheet({ open, onClose, task, day, ctx }) {
           </button>
         </form>
       }>
-      <h3 className="font-display text-2xl leading-tight font-semibold break-words">{task.title}</h3>
+      {edit ? (
+        <form onSubmit={saveEdit} className="rounded-2xl bg-sunk p-3">
+          <input value={edit.title} onChange={(e) => setEdit({ ...edit, title: e.target.value })} maxLength={120} autoFocus
+            aria-label="Task name" className="h-11 w-full rounded-xl bg-card px-3 font-semibold outline-none" />
+          {!task.repeat && (
+            <label className="mt-2 flex items-center justify-between gap-3 text-sm">
+              <span className="font-semibold">Due</span>
+              <input type="date" value={edit.due || ""} min={today} onChange={(e) => setEdit({ ...edit, due: e.target.value })}
+                className="h-9 rounded-full bg-card px-3 font-semibold" />
+            </label>
+          )}
+          <div className="mt-3 flex justify-end gap-2">
+            <button type="button" onClick={() => setEdit(null)} className="h-9 rounded-full px-4 text-sm font-semibold text-muted">Cancel</button>
+            <button disabled={!edit.title.trim() || busy} className="h-9 rounded-full bg-accent px-4 text-sm font-semibold text-accent-ink disabled:opacity-40">Save</button>
+          </div>
+        </form>
+      ) : (
+        <div className="flex items-start gap-2">
+          <h3 className="min-w-0 flex-1 font-display text-2xl leading-tight font-semibold break-words">{task.title}</h3>
+          {canEdit && (
+            <button onClick={() => setEdit({ title: task.title, due: task.due })} aria-label="Edit task"
+              className="grid size-9 shrink-0 place-items-center rounded-full bg-sunk text-muted"><Pencil className="size-4" /></button>
+          )}
+        </div>
+      )}
       <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-muted">
         <span className="inline-flex items-center gap-1.5 font-semibold text-ink">
           <Avatar member={owner} size={18} /> For {mine ? "you" : owner?.name}

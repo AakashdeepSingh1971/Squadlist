@@ -10,6 +10,16 @@ export const supabase = isConfigured
   ? createClient(url, key, { realtime: { params: { eventsPerSecond: 20 }, heartbeatIntervalMs: 15000 } })
   : null;
 
+// This phone's key for the person it is in the current room (see sl_me in
+// schema.sql). Sent with every database call so nobody can act as someone else.
+let phoneKey = null;
+export const setPhoneKey = (k) => { phoneKey = k || null; };
+export const getPhoneKey = () => phoneKey;
+export const rpc = (fn, args) => {
+  const q = supabase.rpc(fn, args);
+  return phoneKey ? q.setHeader("x-sl-key", phoneKey) : q;
+};
+
 // for plain fetch calls (usage counter)
 export const SUPABASE_URL = isConfigured ? url : "";
 export const SUPABASE_KEY = isConfigured ? key : "";

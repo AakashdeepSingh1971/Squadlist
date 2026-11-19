@@ -71,6 +71,28 @@ const meStore = demo ? tabStore : store;
 export const myMemberId = (code) => meStore.get("sl.me:" + code);
 export const setMyMemberId = (code, id) => meStore.set("sl.me:" + code, id);
 
+// The secret that proves this phone is that person (only its hash is in the
+// database). Kept per person, so "switch person" and back still works.
+export const memberKey = (code, id) => (id ? meStore.get(`sl.key:${code}:${id}`) : null);
+export const setMemberKey = (code, id, key) => meStore.set(`sl.key:${code}:${id}`, key);
+export function newPhoneKey() {
+  const b = crypto.getRandomValues(new Uint8Array(32));
+  return btoa(String.fromCharCode(...b)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+// "Use me on another phone": the key rides in the #fragment, which browsers
+// never send to the server.
+export const phoneLink = (code, id, key) => `${shareUrl(code)}#me=${id}.${key}`;
+/** if the page was opened with a phone link, save it and return the person's id */
+export function takePhoneLink(code) {
+  const m = /^#me=([0-9a-f-]{36})\.([A-Za-z0-9_-]{32,100})$/.exec(location.hash);
+  if (!m) return null;
+  setMemberKey(code, m[1], m[2]);
+  setMyMemberId(code, m[1]);
+  history.replaceState(null, "", location.pathname + location.search);
+  return m[1];
+}
+
 // Light / dark / follow the phone
 export const getTheme = () => read("sl.theme") || "system";
 export function applyTheme(theme = getTheme()) {

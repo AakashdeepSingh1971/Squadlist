@@ -183,13 +183,19 @@ export function useSquad(room, meId, { onRemote } = {}) {
 
   const actions = useMemo(() => ({
     async join(profile) {
-      const m = await api.join(profile);
+      const m = { ...(await api.join(profile)), claimed: true };
+      publish({ type: "member", data: m });
+      return m;
+    },
+    // become this person on this phone (see sl_claim)
+    async claim(id) {
+      const m = { ...(await api.claim(id)), claimed: true };
       publish({ type: "member", data: m });
       return m;
     },
     async updateMember(profile) {
       const m = await api.updateMember(profile);
-      if (m) publish({ type: "member", data: m });
+      if (m) publish({ type: "member", data: { ...m, claimed: true } });
     },
     async addTasks({ title, to, repeat, due, needsProof }) {
       const day = dayKey();
@@ -202,6 +208,11 @@ export function useSquad(room, meId, { onRemote } = {}) {
     async removeTask(task) {
       const t = await api.removeTask({ id: task.id, by: meId, today: dayKey() });
       if (t) publish({ type: "task-del", data: t });
+    },
+    // rename / move a pending task (only whoever added it)
+    async editTask(task, { title, due }, day) {
+      const t = await api.editTask({ id: task.id, by: meId, title, due, day });
+      publish({ type: "task", data: t });
     },
     async setNeedsProof(task, on) {
       const t = await api.setNeedsProof({ id: task.id, by: meId, on });
