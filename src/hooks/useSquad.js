@@ -224,6 +224,8 @@ export function useSquad(room, meId, { onRemote } = {}) {
       try {
         await api.setDone({ task: task.id, member: meId, day, done });
         if (done && photo) await api.setPhoto({ task: task.id, member: meId, day, photo: photo.photo, bytes: photo.photo_bytes });
+        // tell whoever gave you this task (the server checks it's really done, once a day per task)
+        if (done && task.created_by !== meId) notify({ type: "done", room, id: task.id });
       } catch (e) {
         publish({ type: "done", data: { ...msg.data, done: !done } });
         throw e;

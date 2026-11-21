@@ -1,7 +1,7 @@
 // What the notify server does, without the web parts, so it's easy to test.
 // api/notify.js wires it to Supabase and to the push services.
 
-export const TYPES = ["nudge", "task", "comment"];
+export const TYPES = ["nudge", "task", "comment", "done"];
 
 /** check what the app sent: { type, room, id } */
 export function readRequest(body) {

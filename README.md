@@ -39,7 +39,8 @@ Without Supabase keys it runs in **demo mode**: saved in this browser only. Open
 4. Deploy on Vercel with `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`, then share the room link
 
 ## Notifications (optional)
-Real phone notifications, even when Squadlist is closed: nudges, new tasks from friends, comments on your tasks,
+Real phone notifications, even when Squadlist is closed: nudges, new tasks from friends, a friend finishing a task
+you gave them, comments on your tasks,
 and a daily "N tasks left" reminder at the hour each person picks. Sent by `api/notify.js`, a Vercel function that
 deploys with the app. On iPhone this needs iOS 16.4+ and Squadlist added to the home screen (Share → Add to Home Screen).
 

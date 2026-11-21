@@ -693,11 +693,13 @@ begin
   end if;
 end; $$;
 
--- Something just happened (nudge / task / comment): who should hear about it?
--- Only real things from the last 2 minutes, each sent once.
+-- Something just happened (nudge / task / comment / done): who should hear about it?
+-- Only real things from the last 2 minutes, each sent once. For "done", p_id is
+-- the task: whoever gave it is told when the other person ticks it (once a day).
 create or replace function public.sl_push_job(p_token text, p_type text, p_room text, p_id uuid) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare v_from uuid; v_to uuid[]; v_title text; v_body text; v_tag text; v_task uuid; v_at timestamptz; v_who sl_members;
+  v_key text := p_type || ':' || p_id;
 begin
   perform sl_push_ok(p_token);
   perform sl_check_room(p_room);
@@ -711,11 +713,17 @@ begin
     select c.member, array(select distinct x from unnest(array[t.assigned_to, t.created_by]) x where x <> c.member),
            c.task_id, c.created_at, c.body into v_from, v_to, v_task, v_at, v_body
     from sl_comments c join sl_tasks t on t.id = c.task_id where c.id = p_id and c.room = p_room;
+  elsif p_type = 'done' then
+    select d.member, array[t.created_by], t.id, d.created_at, 'done:' || t.id || ':' || d.day
+      into v_from, v_to, v_task, v_at, v_key
+    from sl_done d join sl_tasks t on t.id = d.task_id
+    where d.task_id = p_id and d.room = p_room and t.created_by <> t.assigned_to
+    order by d.created_at desc limit 1;
   else
     raise exception 'unknown type';
   end if;
   if v_at is null or v_at < now() - interval '2 minutes' or cardinality(v_to) = 0 then return null; end if;
-  insert into sl_push_log (key) values (p_type || ':' || p_id) on conflict do nothing;
+  insert into sl_push_log (key) values (v_key) on conflict do nothing;
   if not found then return null; end if; -- already sent
 
   select * into v_who from sl_members where id = v_from;
@@ -724,6 +732,8 @@ begin
     v_body := v_title; v_title := '👉 ' || v_who.name || ' nudged you'; v_tag := 'nudge-' || v_task;
   elsif p_type = 'task' then
     v_body := v_title; v_title := '🎁 ' || v_who.name || ' gave you a task'; v_tag := 'task-' || v_task;
+  elsif p_type = 'done' then
+    v_body := v_title; v_title := '✅ ' || v_who.name || ' finished your task'; v_tag := 'done-' || v_task;
   else
     v_title := '💬 ' || v_who.name || ' on “' || v_title || '”'; v_tag := 'comment-' || v_task;
   end if;
