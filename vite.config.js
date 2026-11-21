@@ -4,6 +4,8 @@ import tailwindcss from "@tailwindcss/vite";
 import { VitePWA } from "vite-plugin-pwa";
 
 export default defineConfig({
+  // shown in Settings, so you can tell which version a phone is on
+  define: { __BUILD__: JSON.stringify(new Date().toISOString().slice(0, 16).replace("T", " ") + " UTC") },
   plugins: [
     react(),
     tailwindcss(),

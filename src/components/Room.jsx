@@ -13,6 +13,7 @@ import TaskSheet from "./TaskSheet.jsx";
 import { personLists } from "../lib/lists.js";
 import { memberKey, myMemberId, newPhoneKey, phoneLink, recentRooms, rememberRoom, setMemberKey, setMyMemberId, shareUrl, takePhoneLink } from "../lib/identity.js";
 import { setPhoneKey } from "../lib/supabase.js";
+import { BUILD, checkForUpdate } from "../lib/update.js";
 import { isDemo } from "../lib/api.js";
 import { Avatar, Chip, Sheet } from "./ui.jsx";
 import { ProfileForm, WhoAreYou } from "./Profile.jsx";
@@ -340,7 +341,30 @@ export default function Room({ code, onLeave, theme, setTheme }) {
           </button>
           <button onClick={onLeave} className="h-11 rounded-2xl font-semibold text-muted">Back to all rooms</button>
         </div>
+        <UpdateButton />
       </Sheet>
+    </div>
+  );
+}
+
+function UpdateButton() {
+  const [busy, setBusy] = useState(false);
+  const check = async () => {
+    setBusy(true);
+    try {
+      const r = await checkForUpdate();
+      if (r === "updating") toast.loading("Updating Squadlist…", { description: "It reloads by itself in a moment." });
+      else if (r === "latest") toast.success("You're on the latest version");
+      else { toast("Reloading to get the latest version"); setTimeout(() => location.reload(), 600); }
+    } catch { toast.error("Couldn't check. Are you online?"); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div className="mt-4 flex items-center justify-between gap-3 border-t border-line pt-4 text-xs text-muted">
+      <span>Version {BUILD}</span>
+      <button onClick={check} disabled={busy} className="h-9 rounded-full bg-sunk px-4 font-semibold text-ink disabled:opacity-50">
+        {busy ? "Checking…" : "Check for updates"}
+      </button>
     </div>
   );
 }
