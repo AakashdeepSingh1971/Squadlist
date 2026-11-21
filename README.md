@@ -3,7 +3,7 @@
 Checklists with your friends. Add tasks for yourself or for each other, tick them off, and keep the
 squad streak alive. Up to 10 friends per room. No accounts.
 
-Built with React + Vite, Tailwind, Motion, Supabase (realtime, storage, Edge Functions) and a PWA service worker.
+Built with React + Vite, Tailwind, Motion, Supabase (realtime, storage), a Vercel function for notifications and a PWA service worker.
 
 ## What's in it
 - **Rooms**: room name + passcode (same pair opens the same room on any phone), or a quick room with a share link
@@ -13,7 +13,7 @@ Built with React + Vite, Tailwind, Motion, Supabase (realtime, storage, Edge Fun
 - **Once or repeating**: every day, weekdays or picked days; Today / Tomorrow / a date for one-off tasks
 - **Mine** tab: Overdue, Today (drag ⋮⋮ to reorder), Done today, Upcoming, Other days
 - **Squad** tab: **challenges** on top, then each friend's day: **Nudge 👉** unfinished tasks, **react** 🔥👏💪😂💀 to finished ones
-- **Photo proof 📸**: tick with a photo; whoever adds a task can require one. Photos are shrunk on the phone (~150 KB)
+- **Photo proof 📸**: tick with a photo from the camera or gallery; whoever adds a task can require one. Photos are shrunk on the phone (~150 KB)
 - **Comments** on every task (tap a task)
 - **Streaks**: a day counts when you finish **at least half** of that day's tasks. The **squad streak** grows when everyone who had
   tasks hit half. Days with nothing to do don't break it
@@ -39,21 +39,23 @@ Without Supabase keys it runs in **demo mode**: saved in this browser only. Open
 4. Deploy on Vercel with `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`, then share the room link
 
 ## Notifications (optional)
-Phones get nudges, new tasks and comments, and a daily reminder at the hour each person picks.
-On iPhone this needs iOS 16.4+ and the app added to the home screen.
+Real phone notifications, even when Squadlist is closed: nudges, new tasks from friends, comments on your tasks,
+and a daily "N tasks left" reminder at the hour each person picks. Sent by `api/notify.js`, a Vercel function that
+deploys with the app. On iPhone this needs iOS 16.4+ and Squadlist added to the home screen (Share → Add to Home Screen).
 
-1. `npm run push:keys` prints a public and a private key.
-2. Put the **public** key in Vercel (and `.env.local`) as `VITE_VAPID_PUBLIC_KEY`, then redeploy.
-3. Deploy the function and its secrets with the Supabase CLI:
-   ```bash
-   supabase link --project-ref YOUR-PROJECT-REF
-   supabase secrets set VAPID_PUBLIC_KEY=... VAPID_PRIVATE_KEY=... VAPID_SUBJECT=mailto:you@example.com \
-     CRON_SECRET=some-long-random-text APP_URL=https://your-app.vercel.app
-   supabase functions deploy sl-push --no-verify-jwt
-   ```
-   (`--no-verify-jwt` because the hourly job calls it without a user token; the function checks every request itself:
-   it looks up the nudge/task/comment in the database, only sends for things from the last 2 minutes, and sends each once.)
-4. For the daily reminder: put your project ref and the same `CRON_SECRET` into `supabase/push.sql` and run it in the SQL Editor.
+1. `npm run push:keys` prints a public and a private key. Make a push token too:
+   `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"`
+2. Vercel → Settings → Environment Variables, then redeploy:
+   - `VITE_VAPID_PUBLIC_KEY` = the public key
+   - `VAPID_PRIVATE_KEY` = the private key (never in the app; only the server function reads it)
+   - `PUSH_TOKEN` = the push token
+3. Supabase → SQL Editor: run `supabase/schema.sql` (safe to run again), then put your site address and the same
+   `PUSH_TOKEN` into `supabase/push.sql` and run it. That saves the token in the database and starts the hourly
+   reminder job.
+4. On each phone: Settings (tap your avatar) → turn on **Notifications**.
+
+The server only sends what the database confirms: a real nudge, task or comment from the last 2 minutes, to the
+right people, once.
 
 ## Admin page (data use and cost)
 Open **`/admin`** on your site (e.g. `https://your-app.vercel.app/admin`) to see how much data each phone uses
@@ -74,7 +76,7 @@ Plan limits and prices live in `src/lib/pricing.js`; check https://supabase.com/
 
 ## Tests
 ```bash
-npm test   # streaks, freezes, lists, challenges, badges, cost estimate
+npm test   # streaks, freezes, lists, challenges, badges, cost estimate, notifications
 ```
 
 ## Layout
@@ -91,6 +93,6 @@ src/hooks/useSquad.js   room state, realtime broadcast + presence, reload on ret
 src/components/         Lobby, Profile, Room, Views (tabs), TaskItem, TaskSheet, AddTask, Challenges, Admin, ui
 public/push-sw.js       shows notifications (loaded into the service worker)
 supabase/schema.sql     tables + the only functions the app may call
-supabase/functions/sl-push   Edge Function that sends notifications
+api/notify.js           Vercel function that sends notifications (logic in api/_lib/notify-core.js)
 supabase/push.sql       hourly reminder job (pg_cron)
 ```

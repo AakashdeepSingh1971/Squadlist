@@ -2,10 +2,11 @@ import { useRef, useState } from "react";
 import { AnimatePresence, motion, Reorder, useAnimation, useDragControls } from "motion/react";
 import confetti from "canvas-confetti";
 import { toast } from "sonner";
-import { Camera, Check, GripVertical, Hand, MessageCircle, Repeat, SmilePlus, Trash2, CalendarDays } from "lucide-react";
+import { Camera, Check, GripVertical, Hand, MessageCircle, Plus, Repeat, SmilePlus, Trash2, CalendarDays } from "lucide-react";
 import { ByChip } from "./ui.jsx";
 import { dueLabel, repeatLabel, dayKey } from "../lib/days.js";
-import { REACTIONS } from "../lib/people.js";
+import { REACTIONS, pickEmoji } from "../lib/people.js";
+import { store } from "../lib/identity.js";
 import { pickPhoto, uploadProof } from "../lib/photo.js";
 import { countPhotoView } from "../lib/usage.js";
 
@@ -51,6 +52,7 @@ export default function TaskItem({ entry, ctx, index = 0, reorder = false }) {
   const [open, setOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [picker, setPicker] = useState(false);
+  const [custom, setCustom] = useState(null); // text while typing your own emoji
   const overdue = !done && !task.repeat && task.due && task.due < today;
   const nComments = comments.filter((c) => c.task_id === task.id).length;
 
@@ -89,9 +91,19 @@ export default function TaskItem({ entry, ctx, index = 0, reorder = false }) {
   };
 
   const react = async (emoji) => {
-    setPicker(false);
+    setPicker(false); setCustom(null);
     try { await actions.react(task, day, emoji === myReact ? "" : emoji); }
     catch (e) { toast.error(e.message); }
+  };
+
+  // your own emojis stay in your picker (newest first)
+  const mineExtra = (store.get("sl.reacts") || []).filter((e) => !REACTIONS.includes(e));
+  const reactCustom = (e) => {
+    e.preventDefault();
+    const emoji = pickEmoji(custom || "");
+    if (!emoji) { toast.error("That's not an emoji"); return; }
+    if (!REACTIONS.includes(emoji)) store.set("sl.reacts", [emoji, ...mineExtra.filter((x) => x !== emoji)].slice(0, 8));
+    react(emoji);
   };
 
   const Outer = reorder ? Reorder.Item : motion.li;
@@ -100,6 +112,7 @@ export default function TaskItem({ entry, ctx, index = 0, reorder = false }) {
   return (
     <Outer {...outerProps} layout initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, height: 0, marginTop: 0 }}
       transition={{ delay: Math.min(index * 0.025, 0.2) }} className="relative">
+      <div className="relative">
       {canDelete && (open || dragging) && (
         <button onClick={remove} aria-label={`Remove ${task.title}`} tabIndex={open ? 0 : -1}
           className="absolute inset-y-0 right-0 flex w-24 items-center justify-end rounded-2xl bg-red-500 pr-6 text-white">
@@ -164,26 +177,41 @@ export default function TaskItem({ entry, ctx, index = 0, reorder = false }) {
         )}
         {!mine && done && (
           <div className="relative shrink-0">
-            <button onClick={() => setPicker((p) => !p)} aria-label="React" aria-expanded={picker}
+            <button onClick={() => { setPicker((p) => !p); setCustom(null); }} aria-label="React" aria-expanded={picker}
               className="grid size-8 place-items-center rounded-full bg-sunk text-muted">
               {myReact ? <span className="text-base">{myReact}</span> : <SmilePlus className="size-4" />}
             </button>
             <AnimatePresence>
               {picker && (
                 <motion.div initial={{ opacity: 0, scale: 0.8, y: 4 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.8 }}
-                  className="absolute right-0 bottom-10 z-10 flex gap-1 rounded-full border border-line bg-card p-1 shadow-lg">
-                  {REACTIONS.map((r) => (
-                    <button key={r} onClick={() => react(r)} aria-label={`React ${r}`}
-                      className={`grid size-9 place-items-center rounded-full text-lg transition hover:scale-125 ${myReact === r ? "bg-accent/15" : ""}`}>
-                      {r}
-                    </button>
-                  ))}
+                  className="absolute right-0 bottom-10 z-10 w-[15.5rem] origin-bottom-right rounded-3xl border border-line bg-card p-1.5 shadow-lg">
+                  <div className="grid grid-cols-6 gap-0.5">
+                    {[...mineExtra, ...REACTIONS].map((r) => (
+                      <button key={r} onClick={() => react(r)} aria-label={`React ${r}`}
+                        className={`grid size-9 place-items-center rounded-full text-lg transition hover:scale-125 ${myReact === r ? "bg-accent/15" : ""}`}>
+                        {r}
+                      </button>
+                    ))}
+                    {custom === null && (
+                      <button onClick={() => setCustom("")} aria-label="Use your own emoji"
+                        className="grid size-9 place-items-center rounded-full bg-sunk text-muted"><Plus className="size-4" /></button>
+                    )}
+                  </div>
+                  {custom !== null && (
+                    <form onSubmit={reactCustom} className="mt-1.5 flex gap-1.5">
+                      <input value={custom} onChange={(e) => setCustom(e.target.value)} autoFocus maxLength={16}
+                        placeholder="Any emoji 😎" aria-label="Your emoji"
+                        className="h-9 min-w-0 flex-1 rounded-full bg-sunk px-3 text-base outline-none placeholder:text-sm placeholder:text-muted/70" />
+                      <button disabled={!pickEmoji(custom)} className="h-9 rounded-full bg-accent px-3 text-sm font-semibold text-accent-ink disabled:opacity-40">React</button>
+                    </form>
+                  )}
                 </motion.div>
               )}
             </AnimatePresence>
           </div>
         )}
       </motion.div>
+      </div>
       {grouped.length > 0 && (
         <div className="-mt-2.5 flex justify-end gap-1 pr-3">
           {grouped.map(([emoji, names]) => (

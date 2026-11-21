@@ -1,8 +1,8 @@
 // Notifications: nudges and new tasks reach your phone, plus an optional
-// daily reminder when your tasks aren't done. Needs the sl-push Edge Function
-// (supabase/functions/sl-push) and a VAPID key (see README).
+// daily reminder when your tasks aren't done. Needs the notify server
+// (api/notify.js on Vercel) and a VAPID key (see README).
 // On iPhone this only works once the app is added to the home screen (iOS 16.4+).
-import { supabase, rpc, pushConfigured, VAPID_PUBLIC_KEY } from "./supabase.js";
+import { rpc, pushConfigured, VAPID_PUBLIC_KEY } from "./supabase.js";
 import { addUsage } from "./usage.js";
 import { store } from "./identity.js";
 
@@ -49,5 +49,7 @@ export async function disablePush(room) {
 export function notify(body) {
   if (!pushConfigured) return;
   addUsage("pushes", 1);
-  supabase.functions.invoke("sl-push", { body }).catch(() => {});
+  // api/notify.js on Vercel; it checks with the database what to send
+  fetch("/api/notify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), keepalive: true })
+    .catch(() => {});
 }

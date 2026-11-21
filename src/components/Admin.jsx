@@ -197,8 +197,9 @@ function Dashboard({ r, onRefresh, busy }) {
     storage: Number(t.photo_bytes),
     egress: projectMonth(supabaseBytes),
     realtime: projectMonth(Number(m.msgs)),
-    functions: projectMonth(Number(m.pushes)) + CRON_CALLS_PER_MONTH,
+    functions: 0, // notifications run on Vercel (api/notify.js), not on Supabase
   };
+  const pushCalls = projectMonth(Number(m.pushes)) + CRON_CALLS_PER_MONTH;
   const cost = estimateCost(use);
   const F = PLANS.free;
 
@@ -232,7 +233,11 @@ function Dashboard({ r, onRefresh, busy }) {
         <Meter label="Realtime messages (projected)" used={use.realtime} limit={F.realtime} fmt={fmtNum} note={`${fmtNum(Number(m.msgs))} so far`} />
         <Meter label="Database size" used={use.db} limit={F.db} fmt={fmtBytes} />
         <Meter label="Photo storage" used={use.storage} limit={F.storage} fmt={fmtBytes} note={`${fmtNum(t.photo_files)} photos`} />
-        <Meter label="Notification calls (projected)" used={use.functions} limit={F.functions} fmt={fmtNum} note="incl. hourly reminder job" />
+        <div className="rounded-2xl border border-line bg-card p-4">
+          <p className="text-sm font-semibold">Notification calls (projected)</p>
+          <p className="mt-1 font-display text-2xl font-bold">{fmtNum(pushCalls)}</p>
+          <p className="mt-1 text-xs text-muted">Run on Vercel (api/notify.js), incl. the hourly reminder job. Not billed by Supabase.</p>
+        </div>
       </section>
       <p className="mt-2 text-xs text-muted">
         Live updates, loading and saving are estimates from the phones (message sizes plus overhead). Prices and limits: <code>src/lib/pricing.js</code>, check supabase.com/pricing.

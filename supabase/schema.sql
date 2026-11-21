@@ -203,6 +203,7 @@ declare r sl_events;
 begin
   perform sl_check_room(p_room);
   if pg_column_size(p_data) > 500 then raise exception 'too large'; end if;
+  if p_kind = 'react' and char_length(coalesce(p_data->>'emoji', '')) > 16 then raise exception 'one emoji only'; end if;
   perform sl_me(p_room, p_from);
   -- a reaction replaces your earlier one on the same tick
   if p_kind = 'react' then
@@ -662,3 +663,119 @@ create table if not exists public.sl_push_log (
 );
 alter table public.sl_push_log enable row level security;
 revoke all on public.sl_push_log from anon, authenticated;
+
+-- =====================================================================
+-- Notifications sender: api/notify.js on Vercel asks these functions what to
+-- send. They only answer with the PUSH_TOKEN (set it once, see README):
+--   select public.sl_set_push_token('the PUSH_TOKEN from Vercel');
+-- =====================================================================
+create table if not exists public.sl_push_secret (
+  id int primary key default 1 check (id = 1),
+  hash text not null
+);
+alter table public.sl_push_secret enable row level security;
+revoke all on public.sl_push_secret from anon, authenticated;
+
+create or replace function public.sl_set_push_token(p_token text) returns text
+language plpgsql security definer set search_path = public, extensions as $$
+begin
+  if length(coalesce(p_token, '')) < 24 then raise exception 'Use the long PUSH_TOKEN'; end if;
+  insert into sl_push_secret (id, hash) values (1, encode(digest(p_token, 'sha256'), 'hex'))
+  on conflict (id) do update set hash = excluded.hash;
+  return 'Push token saved';
+end; $$;
+
+create or replace function public.sl_push_ok(p_token text) returns void
+language plpgsql stable security definer set search_path = public, extensions as $$
+begin
+  if not exists (select 1 from sl_push_secret where id = 1 and hash = encode(digest(coalesce(p_token, ''), 'sha256'), 'hex')) then
+    raise exception 'not allowed';
+  end if;
+end; $$;
+
+-- Something just happened (nudge / task / comment): who should hear about it?
+-- Only real things from the last 2 minutes, each sent once.
+create or replace function public.sl_push_job(p_token text, p_type text, p_room text, p_id uuid) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare v_from uuid; v_to uuid[]; v_title text; v_body text; v_tag text; v_task uuid; v_at timestamptz; v_who sl_members;
+begin
+  perform sl_push_ok(p_token);
+  perform sl_check_room(p_room);
+  if p_type = 'nudge' then
+    select e.from_member, array[e.to_member], e.task_id, e.created_at into v_from, v_to, v_task, v_at
+    from sl_events e where e.id = p_id and e.room = p_room and e.kind = 'nudge' and e.to_member is not null;
+  elsif p_type = 'task' then
+    select t.created_by, array[t.assigned_to], t.id, t.created_at into v_from, v_to, v_task, v_at
+    from sl_tasks t where t.id = p_id and t.room = p_room and t.created_by <> t.assigned_to;
+  elsif p_type = 'comment' then
+    select c.member, array(select distinct x from unnest(array[t.assigned_to, t.created_by]) x where x <> c.member),
+           c.task_id, c.created_at, c.body into v_from, v_to, v_task, v_at, v_body
+    from sl_comments c join sl_tasks t on t.id = c.task_id where c.id = p_id and c.room = p_room;
+  else
+    raise exception 'unknown type';
+  end if;
+  if v_at is null or v_at < now() - interval '2 minutes' or cardinality(v_to) = 0 then return null; end if;
+  insert into sl_push_log (key) values (p_type || ':' || p_id) on conflict do nothing;
+  if not found then return null; end if; -- already sent
+
+  select * into v_who from sl_members where id = v_from;
+  select title into v_title from sl_tasks where id = v_task;
+  if p_type = 'nudge' then
+    v_body := v_title; v_title := '👉 ' || v_who.name || ' nudged you'; v_tag := 'nudge-' || v_task;
+  elsif p_type = 'task' then
+    v_body := v_title; v_title := '🎁 ' || v_who.name || ' gave you a task'; v_tag := 'task-' || v_task;
+  else
+    v_title := '💬 ' || v_who.name || ' on “' || v_title || '”'; v_tag := 'comment-' || v_task;
+  end if;
+  return jsonb_build_object('title', v_title, 'body', coalesce(v_body, ''), 'tag', v_tag, 'room', p_room,
+    'subs', coalesce((select jsonb_agg(jsonb_build_object('endpoint', s.endpoint, 'sub', s.sub)) from sl_push s
+                      where s.member = any(v_to) and s.room = p_room), '[]'));
+end; $$;
+
+-- Every hour: phones whose chosen hour it is now (in their own time zone), with
+-- how many tasks they still have today. Each phone gets one a day.
+create or replace function public.sl_push_reminders(p_token text) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare s record; l timestamp; d date; wd smallint; n int; out jsonb := '[]';
+begin
+  perform sl_push_ok(p_token);
+  for s in select * from sl_push where remind_hour is not null loop
+    begin
+      l := now() at time zone s.tz;
+    exception when others then
+      continue; -- unknown time zone
+    end;
+    d := l::date; wd := extract(dow from l);
+    if extract(hour from l) <> s.remind_hour or s.last_reminded is not distinct from d then continue; end if;
+    update sl_push set last_reminded = d where endpoint = s.endpoint;
+    select count(*) into n from sl_tasks t
+    where t.assigned_to = s.member and t.created_day <= d and (t.deleted_day is null or t.deleted_day > d)
+      and case when cardinality(t.repeat) > 0
+        then wd = any(t.repeat) and not exists (select 1 from sl_done x where x.task_id = t.id and x.day = d)
+        else not exists (select 1 from sl_done x where x.task_id = t.id) and (t.due is null or t.due <= d) end;
+    if n > 0 then
+      out := out || jsonb_build_array(jsonb_build_object('endpoint', s.endpoint, 'sub', s.sub, 'room', s.room, 'left', n));
+    end if;
+  end loop;
+  delete from sl_push_log where at < now() - interval '2 days';
+  return out;
+end; $$;
+
+-- a phone uninstalled the app or turned notifications off
+create or replace function public.sl_push_drop(p_token text, p_endpoint text) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  perform sl_push_ok(p_token);
+  delete from sl_push where endpoint = p_endpoint;
+end; $$;
+
+do $$
+declare f text;
+begin
+  foreach f in array array['sl_push_job(text,text,text,uuid)', 'sl_push_reminders(text)', 'sl_push_drop(text,text)'] loop
+    execute format('revoke all on function public.%s from public', f);
+    execute format('grant execute on function public.%s to anon, authenticated', f);
+  end loop;
+  revoke all on function public.sl_set_push_token(text) from public, anon, authenticated;
+  revoke all on function public.sl_push_ok(text) from public, anon, authenticated;
+end $$;

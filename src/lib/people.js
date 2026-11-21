@@ -10,7 +10,15 @@ export const EMOJIS = [
   "🌵", "⚡", "🔥", "🌈", "🎧", "🏀", "⚽", "🎮", "📚", "🚀", "🧃", "🍜",
 ];
 
-export const REACTIONS = ["🔥", "👏", "💪", "😂", "💀"];
+export const REACTIONS = ["🔥", "👏", "💪", "😂", "💀", "❤️", "🙌", "🎉", "😮", "🫡", "👑", "🐐", "💯", "🤝", "😤", "🥲"];
+
+/** first emoji in what someone typed, or null if it isn't one */
+export function pickEmoji(text = "") {
+  const first = typeof Intl.Segmenter === "function"
+    ? [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text.trim())][0]?.segment
+    : [...text.trim()][0];
+  return first && /\p{Extended_Pictographic}|\p{Regional_Indicator}/u.test(first) && first.length <= 16 ? first : null;
+}
 
 export const initial = (name = "?") => [...name.trim()][0]?.toUpperCase() || "?";
 

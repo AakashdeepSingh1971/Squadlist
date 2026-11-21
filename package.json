@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "node --test tests/unit/*.test.js",
-    "push:keys": "npx --yes web-push@3.6.7 generate-vapid-keys"
+    "push:keys": "web-push generate-vapid-keys"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.45.4",
@@ -18,7 +18,8 @@
     "motion": "11.11.17",
     "react": "18.3.1",
     "react-dom": "18.3.1",
-    "sonner": "1.7.0"
+    "sonner": "1.7.0",
+    "web-push": "3.6.7"
   },
   "devDependencies": {
     "@tailwindcss/vite": "4.1.11",

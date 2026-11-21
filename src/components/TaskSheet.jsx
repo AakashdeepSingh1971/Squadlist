@@ -129,7 +129,7 @@ export default function TaskSheet({ open, onClose, task, day, ctx }) {
       ) : mine ? (
         <button onClick={addPhoto} className="mt-4 flex h-24 w-full flex-col items-center justify-center gap-1 rounded-2xl border-2 border-dashed border-line text-sm font-semibold text-muted">
           <Camera className="size-5" />
-          {done ? "Add photo proof" : task.needs_proof ? "Take a photo to tick it off" : "Tick it off with a photo"}
+          {done ? "Add photo proof" : task.needs_proof ? "Add a photo to tick it off" : "Tick it off with a photo"}
         </button>
       ) : task.needs_proof && !done ? (
         <p className="mt-4 rounded-2xl bg-sunk p-3 text-sm">📸 {owner?.name} needs to send a photo to tick this off.</p>

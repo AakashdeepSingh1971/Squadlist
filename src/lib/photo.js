@@ -38,13 +38,12 @@ export async function uploadProof(room, file) {
   return { url: supabase.storage.from("proofs").getPublicUrl(path).data.publicUrl, bytes: blob.size };
 }
 
-/** opens the camera / photo picker; resolves with a File or null */
+/** opens the phone's picker (gallery or camera, the person chooses); resolves with a File or null */
 export function pickPhoto() {
   return new Promise((resolve) => {
     const input = document.createElement("input");
     input.type = "file";
     input.accept = "image/*";
-    input.setAttribute("capture", "environment");
     input.onchange = () => resolve(input.files?.[0] || null);
     input.oncancel = () => resolve(null);
     input.click();
