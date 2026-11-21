@@ -3,3 +3,6 @@ dist
 dev-dist
 .env
 .env.local
+
+# filled-in SQL with secrets
+supabase/*.local.sql

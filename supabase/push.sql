@@ -1,7 +1,7 @@
 -- Daily "tasks left" reminders. Run once in Supabase -> SQL Editor, after
 -- supabase/schema.sql and after setting PUSH_TOKEN on Vercel (see README).
--- Replace the two placeholders first:
---   YOUR-APP.vercel.app   your site's address
+-- Replace the placeholder first (a filled-in copy is made locally as push.local.sql):
+--   (site address is already filled in: squadlist.vercel.app)
 --   YOUR-PUSH-TOKEN       the same PUSH_TOKEN you put on Vercel
 -- Database -> Extensions: pg_cron and pg_net must be enabled (this tries to).
 
@@ -17,7 +17,7 @@ select cron.schedule(
   '0 * * * *',  -- every hour, on the hour; each phone gets it at its own chosen local hour
   $$
   select net.http_post(
-    url := 'https://YOUR-APP.vercel.app/api/notify',
+    url := 'https://squadlist.vercel.app/api/notify',
     headers := jsonb_build_object('Content-Type', 'application/json', 'x-push-token', 'YOUR-PUSH-TOKEN'),
     body := '{"type":"remind"}'::jsonb
   );
