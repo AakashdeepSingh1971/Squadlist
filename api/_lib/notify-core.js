@@ -1,7 +1,7 @@
 // What the notify server does, without the web parts, so it's easy to test.
 // api/notify.js wires it to Supabase and to the push services.
 
-export const TYPES = ["nudge", "task", "comment", "done"];
+export const TYPES = ["nudge", "task", "comment", "done", "react", "challenge", "member"];
 
 /** check what the app sent: { type, room, id } */
 export function readRequest(body) {
@@ -16,11 +16,12 @@ export function readRequest(body) {
   return { type, room, id };
 }
 
-// one push to many phones; forget phones that uninstalled (404 / 410)
+// one push to many phones; forget phones that uninstalled (404 / 410).
+// payload can be a function of the phone (for "Hide details").
 async function fanOut(subs, payload, opts, { send, drop }) {
   let sent = 0, dropped = 0;
   await Promise.all(subs.map(async (s) => {
-    try { await send(s.sub, payload, opts); sent++; }
+    try { await send(s.sub, typeof payload === "function" ? payload(s) : payload, opts); sent++; }
     catch (e) {
       if (e?.statusCode === 404 || e?.statusCode === 410) { dropped++; await drop(s.endpoint).catch(() => {}); }
     }
@@ -38,7 +39,9 @@ const topic = (tag) => String(tag || "").replace(/[^A-Za-z0-9_-]/g, "").slice(0,
 export async function notifyEvent(input, { job, send, drop }) {
   const j = await job(input.type, input.room, input.id);
   if (!j || !j.subs?.length) return { sent: 0, dropped: 0, total: 0 };
-  const payload = JSON.stringify({ title: j.title, body: j.body, tag: j.tag, url: `/?room=${j.room}` });
+  const payload = (s) => JSON.stringify(s.hide
+    ? { title: j.hidden_title || j.title, body: j.hidden_body || "", tag: j.tag, url: `/?room=${j.room}` }
+    : { title: j.title, body: j.body, tag: j.tag, url: `/?room=${j.room}` });
   const out = await fanOut(j.subs, payload, { TTL: 6 * 3600, urgency: "high", topic: topic(j.tag) }, { send, drop });
   return { ...out, total: j.subs.length };
 }

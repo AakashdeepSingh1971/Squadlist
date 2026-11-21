@@ -35,7 +35,7 @@ export default function App() {
   return (
     <>
       {room
-        ? <Room key={room} code={room} onLeave={leave} theme={theme} setTheme={setTheme} />
+        ? <Room key={room} code={room} onLeave={leave} onSwitch={open} theme={theme} setTheme={setTheme} />
         : <Lobby onOpen={open} />}
       <Toaster position="top-center" richColors closeButton
         theme={theme === "system" ? "system" : theme}

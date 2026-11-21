@@ -1,6 +1,6 @@
 // POST /api/notify   (Vercel serverless function)
 //
-// From the app, right after something happens:  { type: "nudge" | "task" | "comment" | "done", room, id }
+// From the app, right after something happens:  { type: "nudge" | "task" | "comment" | "done" | "react" | "challenge" | "member", room, id }
 //   The database checks it's real and recent, says who to tell, and makes sure
 //   it's sent once (sl_push_job), so a page can't send made-up notifications.
 // From pg_cron every hour (supabase/push.sql), header x-push-token: PUSH_TOKEN:  { type: "remind" }

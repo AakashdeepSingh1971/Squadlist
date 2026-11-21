@@ -39,3 +39,16 @@ test("notifyReminders words the count", async () => {
   });
   assert.deepEqual(sent, ["🔥 1 task left today", "🔥 3 tasks left today"]);
 });
+
+test("phones with Hide details get no task names or messages", async () => {
+  const sent = {};
+  await notifyEvent({ type: "comment", room: "abcdef12", id }, {
+    job: async () => ({ title: "💬 Ann on “Doctor visit”", body: "secret plans", hidden_title: "💬 Ann commented",
+      hidden_body: "Open Squadlist to see", tag: "c", room: "abcdef12",
+      subs: [{ endpoint: "open", sub: { endpoint: "open" }, hide: false }, { endpoint: "private", sub: { endpoint: "private" }, hide: true }] }),
+    send: async (sub, p) => { sent[sub.endpoint] = JSON.parse(p); }, drop: async () => {},
+  });
+  assert.equal(sent.open.body, "secret plans");
+  assert.deepEqual([sent.private.title, sent.private.body], ["💬 Ann commented", "Open Squadlist to see"]);
+  assert.ok(!JSON.stringify(sent.private).includes("Doctor") && !JSON.stringify(sent.private).includes("secret"));
+});

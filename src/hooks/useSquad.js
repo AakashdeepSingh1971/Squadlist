@@ -185,6 +185,7 @@ export function useSquad(room, meId, { onRemote } = {}) {
     async join(profile) {
       const m = { ...(await api.join(profile)), claimed: true };
       publish({ type: "member", data: m });
+      notify({ type: "member", room, id: m.id });
       return m;
     },
     // become this person on this phone (see sl_claim)
@@ -243,6 +244,7 @@ export function useSquad(room, meId, { onRemote } = {}) {
       const data = { day, emoji };
       const e = await api.addEvent({ kind: "react", task: task.id, from: meId, to: task.assigned_to, data });
       publish({ type: "event", data: e || { kind: "react", task_id: task.id, from_member: meId, data: { day, emoji: "" } } });
+      if (e) notify({ type: "react", room, id: e.id });
     },
     async comment(task, body) {
       const c = await api.addComment({ task: task.id, member: meId, body });
@@ -260,6 +262,7 @@ export function useSquad(room, meId, { onRemote } = {}) {
     async addChallenge(ch) {
       const c = await api.addChallenge({ ...ch, by: meId });
       publish({ type: "challenge", data: c });
+      notify({ type: "challenge", room, id: c.id });
     },
     async removeChallenge(c) {
       await api.removeChallenge({ id: c.id, by: meId });

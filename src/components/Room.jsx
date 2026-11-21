@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "motion/react";
 import { toast } from "sonner";
-import { Activity, BarChart3, ListChecks, Plus, Settings, Share2, Users } from "lucide-react";
+import { Activity, BarChart3, Check, ChevronDown, ListChecks, Plus, Settings, Share2, Users } from "lucide-react";
 import { useSquad } from "../hooks/useSquad.js";
 import { indexDone, streak, dayScore, passed, frozenSet, freezeBank, dayStatus } from "../lib/streak.js";
 import { earnedBadges, BADGES } from "../lib/goals.js";
@@ -28,7 +28,7 @@ const TABS = [
   { id: "stats", label: "Stats", icon: BarChart3 },
 ];
 
-export default function Room({ code, onLeave, theme, setTheme }) {
+export default function Room({ code, onLeave, onSwitch, theme, setTheme }) {
   const linked = useRef(false); // opened with a "use me on another phone" link
   const [meId, setMeId] = useState(() => {
     const id = takePhoneLink(code);
@@ -39,6 +39,7 @@ export default function Room({ code, onLeave, theme, setTheme }) {
   const [tab, setTab] = useState("mine");
   const [adding, setAdding] = useState(null); // member id the new task is for
   const [settings, setSettings] = useState(false);
+  const [rooms, setRooms] = useState(false); // room switcher
   const [openTask, setOpenTask] = useState(null); // { id, day }
   const label = recentRooms().find((r) => r.code === code)?.label;
   const ctx = useRef({});
@@ -244,12 +245,14 @@ export default function Room({ code, onLeave, theme, setTheme }) {
     <div className="min-h-dvh pt-safe">
       <div className="mx-auto max-w-md px-4 pb-32">
         <header className="flex items-center gap-2 pt-4">
-          <button onClick={onLeave} className="min-w-0 flex-1 text-left" aria-label="Back to rooms">
+          <button onClick={() => setRooms(true)} className="min-w-0 flex-1 text-left" aria-label="Switch room">
             <p className="text-xs font-semibold text-muted">
               <span className={`mr-1.5 inline-block size-2 rounded-full ${squad.status === "live" ? "bg-good" : "animate-pulse bg-amber-400"}`} />
               {isDemo ? "Demo room" : squad.status === "live" ? `${squad.online.size || 1} here now` : "Reconnecting…"}
             </p>
-            <h1 className="truncate font-display text-2xl font-extrabold tracking-tight">{label || "Squad"}</h1>
+            <h1 className="flex items-center gap-1 font-display text-2xl font-extrabold tracking-tight">
+              <span className="truncate">{label || "Squad"}</span><ChevronDown className="size-5 shrink-0 text-muted" />
+            </h1>
           </button>
           <button onClick={share} aria-label="Invite friends" className="grid size-10 place-items-center rounded-full bg-card text-ink shadow-sm ring-1 ring-line">
             <Share2 className="size-4.5" />
@@ -323,6 +326,31 @@ export default function Room({ code, onLeave, theme, setTheme }) {
 
       <TaskSheet open={!!sheetTask} onClose={() => setOpenTask(null)} task={sheetTask} day={openTask?.day} ctx={viewCtx} />
 
+      <Sheet open={rooms} onClose={() => setRooms(false)} title="Your rooms">
+        <ul className="grid gap-2">
+          {recentRooms().map((r) => {
+            const here = r.code === code;
+            return (
+              <li key={r.code}>
+                <button onClick={() => { setRooms(false); if (!here) onSwitch(r.code); }} aria-current={here ? "true" : undefined}
+                  className={`flex w-full items-center gap-3 rounded-2xl border p-3 text-left transition active:scale-[.98] ${here ? "border-accent bg-accent/10" : "border-line bg-card"}`}>
+                  <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-sunk text-lg">{here ? "📍" : "👥"}</span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-semibold">{r.label || `Room ${r.code.slice(0, 6)}`}</span>
+                    <span className="block truncate text-sm text-muted">{r.as ? `You're ${r.as}` : "Not joined yet"}</span>
+                  </span>
+                  {here && <Check className="size-5 shrink-0 text-accent" />}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+        <button onClick={() => { setRooms(false); onLeave(); }}
+          className="mt-3 h-12 w-full rounded-2xl border-2 border-dashed border-line font-semibold text-muted">
+          + Join or make another room
+        </button>
+      </Sheet>
+
       <Sheet open={settings} onClose={() => setSettings(false)} title="You & settings">
         <ProfileForm initialValue={me} members={squad.members} submitLabel="Save"
           onSubmit={async (p) => { await squad.actions.updateMember({ ...p, id: meId }); toast.success("Saved"); setSettings(false); }} />
@@ -377,7 +405,7 @@ function Notifications({ code, meId }) {
   const save = async (next) => {
     setBusy(true);
     try {
-      if (next.on) await enablePush(code, meId, next.hour);
+      if (next.on) await enablePush(code, meId, next.hour, next.hide);
       else await disablePush(code);
       setPrefs(next);
       toast.success(next.on ? "Notifications on 🔔" : "Notifications off");
@@ -397,12 +425,19 @@ function Notifications({ code, meId }) {
         <label className="mt-3 flex items-center justify-between gap-3 text-sm">
           <span>Daily reminder if tasks are left</span>
           <select value={prefs.hour ?? ""} disabled={busy} className="h-9 rounded-full bg-card px-3 font-semibold"
-            onChange={(e) => save({ on: true, hour: e.target.value === "" ? null : Number(e.target.value) })}>
+            onChange={(e) => save({ ...prefs, on: true, hour: e.target.value === "" ? null : Number(e.target.value) })}>
             <option value="">Off</option>
             {[7, 8, 9, 12, 17, 18, 19, 20, 21, 22, 23].map((h) => (
               <option key={h} value={h}>{new Date(2000, 0, 1, h).toLocaleTimeString([], { hour: "numeric" })}</option>
             ))}
           </select>
+        </label>
+      )}
+      {prefs.on && (
+        <label className="mt-3 flex items-center justify-between gap-3 text-sm">
+          <span>Hide details<br /><span className="text-xs text-muted">Shows who did what, never task names or messages</span></span>
+          <input type="checkbox" checked={!!prefs.hide} disabled={busy} className="size-5 accent-[var(--accent)]"
+            onChange={(e) => save({ ...prefs, on: true, hide: e.target.checked })} />
         </label>
       )}
       {!pushSupported() && (

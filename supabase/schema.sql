@@ -205,6 +205,11 @@ begin
   if pg_column_size(p_data) > 500 then raise exception 'too large'; end if;
   if p_kind = 'react' and char_length(coalesce(p_data->>'emoji', '')) > 16 then raise exception 'one emoji only'; end if;
   perform sl_me(p_room, p_from);
+  -- a nudge can be repeated an hour after your last one on the same task
+  if p_kind = 'nudge' and exists (select 1 from sl_events where room = p_room and kind = 'nudge' and task_id = p_task
+      and from_member = p_from and created_at > now() - interval '1 hour') then
+    raise exception 'You nudged them less than an hour ago';
+  end if;
   -- a reaction replaces your earlier one on the same tick
   if p_kind = 'react' then
     delete from sl_events where room = p_room and kind = 'react' and task_id = p_task
@@ -296,6 +301,8 @@ create table if not exists public.sl_push (
   created_at timestamptz not null default now()
 );
 create index if not exists sl_push_member on public.sl_push (member);
+-- "Hide details": this phone's notifications never show task names or messages
+alter table public.sl_push add column if not exists hide boolean not null default false;
 
 alter table public.sl_comments   enable row level security;
 alter table public.sl_freezes    enable row level security;
@@ -463,15 +470,16 @@ begin
   return null;
 end; $$;
 
-create or replace function public.sl_save_push(p_room text, p_member uuid, p_sub jsonb, p_tz text, p_hour int)
+drop function if exists public.sl_save_push(text, uuid, jsonb, text, int);
+create or replace function public.sl_save_push(p_room text, p_member uuid, p_sub jsonb, p_tz text, p_hour int, p_hide boolean default false)
 returns void language plpgsql security definer set search_path = public as $$
 begin
   perform sl_me(p_room, p_member);
   if coalesce(p_sub->>'endpoint', '') !~ '^https://' or pg_column_size(p_sub) > 2000 then raise exception 'bad subscription'; end if;
-  insert into sl_push (endpoint, room, member, sub, tz, remind_hour)
-  values (p_sub->>'endpoint', p_room, p_member, p_sub, left(coalesce(p_tz, 'UTC'), 60), p_hour)
+  insert into sl_push (endpoint, room, member, sub, tz, remind_hour, hide)
+  values (p_sub->>'endpoint', p_room, p_member, p_sub, left(coalesce(p_tz, 'UTC'), 60), p_hour, coalesce(p_hide, false))
   on conflict (endpoint) do update set room = excluded.room, member = excluded.member, sub = excluded.sub,
-    tz = excluded.tz, remind_hour = excluded.remind_hour;
+    tz = excluded.tz, remind_hour = excluded.remind_hour, hide = excluded.hide;
 end; $$;
 
 create or replace function public.sl_delete_push(p_endpoint text)
@@ -644,7 +652,7 @@ begin
     'sl_add_comment(text,uuid,uuid,text)', 'sl_delete_comment(text,uuid,uuid)',
     'sl_use_freeze(text,uuid,date)', 'sl_add_challenge(text,uuid,text,text,int,date)',
     'sl_remove_challenge(text,uuid,uuid)', 'sl_checkin(text,uuid,uuid,date,boolean)',
-    'sl_save_push(text,uuid,jsonb,text,int)', 'sl_delete_push(text)',
+    'sl_save_push(text,uuid,jsonb,text,int,boolean)', 'sl_delete_push(text)',
     'sl_log_usage(text,date,text,text,text,bigint,bigint,bigint,bigint,int,int,int)', 'sl_admin_report(text)',
     'sl_claim(text,uuid)', 'sl_edit_task(text,uuid,uuid,text,date,date)'
   ] loop
@@ -693,13 +701,15 @@ begin
   end if;
 end; $$;
 
--- Something just happened (nudge / task / comment / done): who should hear about it?
--- Only real things from the last 2 minutes, each sent once. For "done", p_id is
--- the task: whoever gave it is told when the other person ticks it (once a day).
+-- Something just happened: who should hear about it? Only real things from the
+-- last 2 minutes, each sent once.
+--   nudge / task / comment / react: p_id is that row; challenge / member: the
+--   whole squad except whoever did it; done: p_id is the task, whoever gave it
+--   is told when the other person ticks it (once a day).
 create or replace function public.sl_push_job(p_token text, p_type text, p_room text, p_id uuid) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare v_from uuid; v_to uuid[]; v_title text; v_body text; v_tag text; v_task uuid; v_at timestamptz; v_who sl_members;
-  v_key text := p_type || ':' || p_id;
+  v_key text := p_type || ':' || p_id; v_emoji text; v_hidden text;
 begin
   perform sl_push_ok(p_token);
   perform sl_check_room(p_room);
@@ -719,6 +729,20 @@ begin
     from sl_done d join sl_tasks t on t.id = d.task_id
     where d.task_id = p_id and d.room = p_room and t.created_by <> t.assigned_to
     order by d.created_at desc limit 1;
+  elsif p_type = 'react' then
+    -- one ping per friend per task per day, even if they change their emoji
+    select e.from_member, array[e.to_member], e.task_id, e.created_at, e.data->>'emoji',
+           'react:' || e.task_id || ':' || e.from_member || ':' || coalesce(e.data->>'day', '')
+      into v_from, v_to, v_task, v_at, v_emoji, v_key
+    from sl_events e where e.id = p_id and e.room = p_room and e.kind = 'react' and e.to_member is not null and e.to_member <> e.from_member;
+  elsif p_type = 'challenge' then
+    select c.created_by, array(select m.id from sl_members m where m.room = p_room and m.id <> c.created_by),
+           c.created_at, c.emoji || ' ' || c.title into v_from, v_to, v_at, v_body
+    from sl_challenges c where c.id = p_id and c.room = p_room;
+  elsif p_type = 'member' then
+    select m.id, array(select o.id from sl_members o where o.room = p_room and o.id <> m.id), m.created_at
+      into v_from, v_to, v_at
+    from sl_members m where m.id = p_id and m.room = p_room;
   else
     raise exception 'unknown type';
   end if;
@@ -734,11 +758,20 @@ begin
     v_body := v_title; v_title := '🎁 ' || v_who.name || ' gave you a task'; v_tag := 'task-' || v_task;
   elsif p_type = 'done' then
     v_body := v_title; v_title := '✅ ' || v_who.name || ' finished your task'; v_tag := 'done-' || v_task;
+  elsif p_type = 'react' then
+    v_body := v_title; v_title := coalesce(v_emoji, '') || ' ' || v_who.name || ' reacted to your task'; v_tag := 'react-' || v_task;
+  elsif p_type = 'challenge' then
+    v_title := '🏁 ' || v_who.name || ' started a challenge'; v_tag := 'challenge-' || p_id;
+  elsif p_type = 'member' then
+    v_title := '👋 ' || v_who.name || ' joined the squad'; v_body := coalesce(v_who.emoji, '') || ' Say hi and give them a task'; v_tag := 'member-' || p_id;
   else
     v_title := '💬 ' || v_who.name || ' on “' || v_title || '”'; v_tag := 'comment-' || v_task;
+    v_hidden := '💬 ' || v_who.name || ' commented';
   end if;
+  -- phones with "Hide details" get who and what happened, never task names or messages
   return jsonb_build_object('title', v_title, 'body', coalesce(v_body, ''), 'tag', v_tag, 'room', p_room,
-    'subs', coalesce((select jsonb_agg(jsonb_build_object('endpoint', s.endpoint, 'sub', s.sub)) from sl_push s
+    'hidden_title', coalesce(v_hidden, v_title), 'hidden_body', 'Open Squadlist to see',
+    'subs', coalesce((select jsonb_agg(jsonb_build_object('endpoint', s.endpoint, 'sub', s.sub, 'hide', s.hide)) from sl_push s
                       where s.member = any(v_to) and s.room = p_room), '[]'));
 end; $$;
 
@@ -764,7 +797,7 @@ begin
         then wd = any(t.repeat) and not exists (select 1 from sl_done x where x.task_id = t.id and x.day = d)
         else not exists (select 1 from sl_done x where x.task_id = t.id) and (t.due is null or t.due <= d) end;
     if n > 0 then
-      out := out || jsonb_build_array(jsonb_build_object('endpoint', s.endpoint, 'sub', s.sub, 'room', s.room, 'left', n));
+      out := out || jsonb_build_array(jsonb_build_object('endpoint', s.endpoint, 'sub', s.sub, 'room', s.room, 'left', n, 'hide', s.hide));
     end if;
   end loop;
   delete from sl_push_log where at < now() - interval '2 days';

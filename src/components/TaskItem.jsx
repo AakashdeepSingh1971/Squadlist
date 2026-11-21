@@ -1,10 +1,10 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, Reorder, useAnimation, useDragControls } from "motion/react";
 import confetti from "canvas-confetti";
 import { toast } from "sonner";
 import { Camera, Check, GripVertical, Hand, MessageCircle, Plus, Repeat, SmilePlus, Trash2, CalendarDays } from "lucide-react";
 import { ByChip } from "./ui.jsx";
-import { dueLabel, repeatLabel, dayKey } from "../lib/days.js";
+import { dueLabel, repeatLabel } from "../lib/days.js";
 import { REACTIONS, pickEmoji } from "../lib/people.js";
 import { store } from "../lib/identity.js";
 import { pickPhoto, uploadProof } from "../lib/photo.js";
@@ -38,6 +38,20 @@ export async function tickWithPhoto(task, today, actions, room) {
   }
 }
 
+const NUDGE_WAIT = 60 * 60 * 1000; // same as sl_add_event in schema.sql
+
+/** the time now, refreshed every `every` ms (0 = don't tick) */
+function useNow(every) {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    setNow(Date.now());
+    if (!every) return;
+    const t = setInterval(() => setNow(Date.now()), every);
+    return () => clearInterval(t);
+  }, [every]);
+  return now;
+}
+
 export default function TaskItem({ entry, ctx, index = 0, reorder = false }) {
   const { membersById, meId, today, events, comments, doneByKey, actions, onAllDone, onOpen, room } = ctx;
   const { task, day, done } = entry;
@@ -62,8 +76,12 @@ export default function TaskItem({ entry, ctx, index = 0, reorder = false }) {
     (acc[e.data.emoji] ||= []).push(membersById[e.from_member]?.name || "someone");
     return acc;
   }, {}));
-  const nudgedToday = events.some((e) => e.kind === "nudge" && e.task_id === task.id && e.from_member === meId &&
-    dayKey(new Date(e.created_at)) === today);
+  // you can nudge again an hour after your last nudge on this task
+  const lastNudge = events.reduce((t, e) => e.kind === "nudge" && e.task_id === task.id && e.from_member === meId
+    ? Math.max(t, new Date(e.created_at).getTime()) : t, 0);
+  const now = useNow(lastNudge && Date.now() - lastNudge < NUDGE_WAIT ? 30000 : 0);
+  const waitMin = lastNudge ? Math.ceil((NUDGE_WAIT - (now - lastNudge)) / 60000) : 0;
+  const nudgedRecently = waitMin > 0;
 
   const toggle = async () => {
     if (!mine) return;
@@ -169,10 +187,10 @@ export default function TaskItem({ entry, ctx, index = 0, reorder = false }) {
         )}
 
         {!mine && !done && (
-          <button onClick={nudge} disabled={nudgedToday}
+          <button onClick={nudge} disabled={nudgedRecently}
             className="flex h-8 shrink-0 items-center gap-1 rounded-full bg-sunk px-3 text-xs font-semibold transition active:scale-95 disabled:opacity-50"
-            aria-label={nudgedToday ? `You nudged ${owner?.name} today` : `Nudge ${owner?.name} about ${task.title}`}>
-            <Hand className="size-3.5" /> {nudgedToday ? "Nudged" : "Nudge"}
+            aria-label={nudgedRecently ? `Nudged. You can nudge ${owner?.name} again in ${waitMin} minutes` : `Nudge ${owner?.name} about ${task.title}`}>
+            <Hand className="size-3.5" /> {nudgedRecently ? `Again in ${waitMin}m` : lastNudge ? "Nudge again" : "Nudge"}
           </button>
         )}
         {!mine && done && (

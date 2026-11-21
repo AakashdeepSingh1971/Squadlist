@@ -18,10 +18,10 @@ const keyBytes = (b64) => {
   return Uint8Array.from(raw, (c) => c.charCodeAt(0));
 };
 
-export const pushPrefs = (room) => store.get("sl.push:" + room) || { on: false, hour: 21 };
+export const pushPrefs = (room) => ({ on: false, hour: 21, hide: false, ...(store.get("sl.push:" + room) || {}) });
 
 /** turn notifications on (asks permission) and save which room/person this phone is */
-export async function enablePush(room, member, hour) {
+export async function enablePush(room, member, hour, hide = false) {
   if (!pushSupported()) throw new Error("This browser can't do notifications");
   const perm = await Notification.requestPermission();
   if (perm !== "granted") throw new Error("Notifications are blocked. Allow them in your browser settings.");
@@ -30,10 +30,10 @@ export async function enablePush(room, member, hour) {
     (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(VAPID_PUBLIC_KEY) }));
   const { error } = await rpc("sl_save_push", {
     p_room: room, p_member: member, p_sub: sub.toJSON(),
-    p_tz: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC", p_hour: hour,
+    p_tz: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC", p_hour: hour, p_hide: !!hide,
   });
   if (error) throw new Error(error.message);
-  store.set("sl.push:" + room, { on: true, hour });
+  store.set("sl.push:" + room, { on: true, hour, hide: !!hide });
 }
 
 export async function disablePush(room) {

@@ -133,6 +133,8 @@ function demoApi(room) {
       Object.assign(row, { photo, photo_bytes: bytes });
     }),
     addEvent: op((d, { kind, task, from, to, data }) => {
+      if (kind === "nudge" && d.events.some((e) => e.kind === "nudge" && e.task_id === task && e.from_member === from &&
+          Date.now() - new Date(e.created_at).getTime() < 3600e3)) throw new Error("You nudged them less than an hour ago");
       if (kind === "react") {
         d.events = d.events.filter((e) => !(e.kind === "react" && e.task_id === task && e.from_member === from && e.data?.day === data.day));
         if (!data.emoji) return null;
